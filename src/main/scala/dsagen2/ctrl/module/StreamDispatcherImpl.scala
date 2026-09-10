@@ -657,7 +657,12 @@ class StreamDispatcherImpl(
   // Update the Stream Entry Valid
   strEntryValids.zipWithIndex.foreach { case (valid, idx) =>
     // Calculate enqueue/dequeue time
-    val doEnqueue: Bool = !valid && newStrEnqueue && idx.U === locationNewStrEntry
+    // Only an ACCEPTED command creates an entry: a stream command that is held
+    // back (e.g. behind a pending wait) stays valid on the RoCC interface for
+    // many cycles, and marking an entry valid every one of those cycles floods
+    // the queue with phantom streams (stale entry data) that dispatch to the
+    // memory engines and keep the wait from ever retiring.
+    val doEnqueue: Bool = !valid && newStrEnqueue && roccCmd.ready && idx.U === locationNewStrEntry
     val doDequeue: Bool = valid && dispatchFromQueue && idx.U === locationDispatch
     // Update the valid register
     valid := Mux(
@@ -765,7 +770,7 @@ class StreamDispatcherImpl(
   strDispPort := Mux(
     dispatchFromQueue,
     strEntryFromQueue,
-    Mux(newStrDispatched, newStrEntry, 0.U.asTypeOf(new StreamDispatchBus(dsa)))
+    Mux(newStrDispatched && roccCmd.ready, newStrEntry, 0.U.asTypeOf(new StreamDispatchBus(dsa)))  // same: dispatch only accepted commands
   )
 
   // RoCC busy, compute / memory / ctrl is busy, two cycles is DSA command received
