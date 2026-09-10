@@ -612,9 +612,12 @@ class ProcessingElementImpl(
     }
   }
 
-  // Reset the register
+  // Reset the register file when the node's configuration is (re)written. A
+  // register-update packet must not reset it: the bitstream uses that group to
+  // preload constants (immediate operands have no other home in the PE), and
+  // those packets follow the configuration packets.
   resetRF match {
-    case Some(value) => value := configThis;
+    case Some(value) => value := configThis && configPort.cfgGroup === updateConfig
     case None        =>
   }
 
