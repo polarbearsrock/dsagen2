@@ -427,19 +427,23 @@ class ProcessingElementImpl(
       }
     }
     operands(operIdx).bits := MuxLookup(sel, 0.U.asTypeOf(new CompDataBundle(compNode)), operandBitsLUT)
-    operands(operIdx).valid := MuxLookup(sel, false.B, operandValidLookup)
+    // Operands that select the same input port (e.g. x * x) must dequeue it
+    // together: this operand only sees the element when every other operand
+    // sharing the port can accept it too, otherwise one of them misses or
+    // duplicates elements.
+    val sharersReady: Bool = (0 until maxNumOperand).filter(_ != operIdx).map { other =>
+      val shared: Bool = sel =/= 0.U && sel <= numInput.U && operandsSel(other) === sel
+      Mux(shared, operands(other).ready, true.B)
+    }.foldLeft(true.B)(_ && _)
+    operands(operIdx).valid := MuxLookup(sel, false.B, operandValidLookup) && sharersReady
   }
-  // Connect Ready of Compute Input Ports
+  // Connect Ready of Compute Input Ports: an input port is dequeued when every
+  // operand that selects it is ready (several operands may share one port)
   for (inputIdx <- 0 until numInput) {
-    compInPorts(inputIdx).ready.get := false.B // by default, we assume no operands use this input port
-    for (operIdx <- 0 until maxNumOperand) {
-      val sel: UInt = operandsSel(operIdx)
-      // If select line of the operand pick this one, then use it ready
-      // when in loop will create a sequential mux
-      when(sel === (inputIdx + 1).U) {
-        compInPorts(inputIdx).ready.get := operands(operIdx).ready
-      }
-    }
+    val selecting: Seq[Bool] = operandsSel.map(_ === (inputIdx + 1).U)
+    val allSelectingReady: Bool = selecting.zip(operands.map(_.ready)).map { case (s, r) => Mux(s, r, true.B) }
+      .foldLeft(true.B)(_ && _)
+    compInPorts(inputIdx).ready.get := VecInit(selecting).asUInt().orR() && allSelectingReady
   }
 
   // Connect [[operandsSel]] to [[regReadsValid]] and [[regReadsIdx]]
@@ -625,18 +629,27 @@ class ProcessingElementImpl(
 
   /* -------------------------      Output Connection       ------------------------- */
 
-  // Report Node Statue to other nodes
-  compOutPorts.foreach { output =>
+  // Report Node Statue to other nodes. Activity is reported per port: a vector
+  // port wired directly to this PE only dequeues when every sink that claims
+  // to be active is ready, so an input that no operand (or control) selects
+  // must not be reported active, otherwise the port deadlocks (the switch
+  // reports per-input hasSink the same way).
+  compOutPorts.zipWithIndex.foreach { case (output, outputIdx) =>
     output.ctrl.get.dAct match {
-      case Some(bool) => bool := RegNext(configBits.enabled);
-      case None       =>
+      case Some(bool) =>
+        val selected: Bool = VecInit(resOutSel.map(_ === (outputIdx + 1).U)).asUInt().orR()
+        bool := RegNext(configBits.enabled && selected)
+      case None =>
     }
   }
 
-  compInPorts.foreach { input =>
+  compInPorts.zipWithIndex.foreach { case (input, inputIdx) =>
     input.ctrl.get.uAct match {
-      case Some(bool) => bool := RegNext(configBits.enabled);
-      case None       =>
+      case Some(bool) =>
+        val operandUse: Bool = VecInit(operandsSel.map(_ === (inputIdx + 1).U)).asUInt().orR()
+        val ctrlUse: Bool = inputCtrlSel === (inputIdx + 1).U
+        bool := RegNext(configBits.enabled && (operandUse || ctrlUse))
+      case None =>
     }
   }
 

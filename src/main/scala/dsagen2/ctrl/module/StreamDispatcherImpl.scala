@@ -747,11 +747,18 @@ class StreamDispatcherImpl(
   // LinStrm, IndStrm, RecStrm, Recv: if this new entry needs to go into queue, then check queue fullness
   // Wait: check the sync queue fullness
   // Port Config: ready if queue if empty
+  // A pending wait must retire before later stream, receive or port-config commands are
+  // accepted: its "compute finished" condition cannot tell data of streams issued before it
+  // from data of streams issued after it (a later stream's result parked in a switch keeps the
+  // fabric busy forever while the core, stalled on the wait's destination register, can never
+  // issue the command that would drain it). The functional model serializes after ss_wait.
+  val waitPending: Bool = syncQueue.io.deq.valid
+  val isStrCmd:    Bool = isLinStr || isIndStr || isRecStr || isRecv
   roccCmd.ready :=
     !reloadBitstream && Mux(
-      newStrEnqueue && (isLinStr || isIndStr || isRecStr || isRecv),
-      !strQueueFull,
-      Mux(isWait, syncQueue.io.enq.ready, Mux(isPortCfg, queuyIsEmpty, true.B))
+      isStrCmd,
+      !waitPending && (!newStrEnqueue || !strQueueFull),
+      Mux(isWait, syncQueue.io.enq.ready, Mux(isPortCfg, queuyIsEmpty && !waitPending, true.B))
     )
 
   // Dispatch: Choose between dispatch directly or dispatch from queue

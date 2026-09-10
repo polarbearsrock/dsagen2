@@ -49,13 +49,16 @@ object DivSqrt extends IsFunctionUnitImplementation {
     // Gather inputs and bitWidth
     val dataPathBits: Int = inputBits.head.getWidth
     val A:            UInt = inputBits.head
-    val B:            UInt = inputBits(1)
+    // A PE that keeps only FloatSqrt (a DSE-pruned operation set) instantiates
+    // this unit with a single operand; only FloatDiv needs the second one.
+    val hasB:         Boolean = inputBits.length > 1
+    val B:            UInt = if (hasB) inputBits(1) else 0.U(dataPathBits.W)
     // Create input valid signal
     val inputValid: Bool = {
       val validLut = opDataTypeSet.toSeq.map { case opt @ DsaOperDataType(operation, dataType, predefinedImpl) =>
         operation match {
           case dsagen2.top.config.operation.Operation.FloatDiv =>
-            encoding(opt).U -> (inputValids.head && inputValids(1))
+            encoding(opt).U -> (inputValids.head && (if (hasB) inputValids(1) else false.B))
           case dsagen2.top.config.operation.Operation.FloatSqrt => encoding(opt).U -> inputValids.head
           case err                                              => require(requirement = false, s"Operation $err is not supported by $this"); -1.U -> false.B
         }
@@ -88,7 +91,7 @@ object DivSqrt extends IsFunctionUnitImplementation {
       fdiv.io.s_axis_a_tdata := A
       fdiv.io.s_axis_a_tvalid := inputValids.head && !isSqrt
       fdiv.io.s_axis_b_tdata := B
-      fdiv.io.s_axis_b_tvalid := inputValids(1) && !isSqrt
+      fdiv.io.s_axis_b_tvalid := (if (hasB) inputValids(1) else false.B) && !isSqrt
       fsqrt.io.s_axis_a_tdata := A
       fsqrt.io.s_axis_a_tvalid := inputValids.head && isSqrt
       // Connect output ready
@@ -105,7 +108,7 @@ object DivSqrt extends IsFunctionUnitImplementation {
       )
       val excp: EnumBundle = Wire(new EnumBundle(Set.empty))
       // Return
-      (Seq(outputBits), Seq(outputValid), Seq(inputReady, inputReady), excp)
+      (Seq(outputBits), Seq(outputValid), Seq.fill(inputBits.length)(inputReady), excp)
     } else {
       // Loop over all granularity
       // opcode -> (outputBits, exception, valid, ready)
@@ -198,7 +201,7 @@ object DivSqrt extends IsFunctionUnitImplementation {
       val exception: EnumBundle = Wire(new EnumBundle(floatException))
       EnumBundle.connect(exception, MuxLookup(opcode, 0.U, outputExcpLut).asTypeOf(new EnumBundle(floatException)))
       val outputBits: UInt = Mux(outputValid, outputBitsWire, 0.U)
-      (Seq(outputBits), Seq(outputValid), Seq(inputReady, inputReady), exception)
+      (Seq(outputBits), Seq(outputValid), Seq.fill(inputBits.length)(inputReady), exception)
     }
   }
 }

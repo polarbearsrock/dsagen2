@@ -201,7 +201,10 @@ object DSAFixedConfig {
   val peConfType :: swConfType :: ivpConfType :: ovpConfType :: Nil = Enum(CONF_NODE_TYPE)
 
   // Reconfiguration Port Max Fanout
-  val CONF_FANOUT: Int = 2
+  // Maximum fan-out of the reconfiguration network tree. Overridable through
+  // the DSAGEN_CONF_FANOUT environment variable for irregular (e.g. DSE-pruned)
+  // fabrics where no fan-out-2 spanning tree exists.
+  val CONF_FANOUT: Int = sys.env.get("DSAGEN_CONF_FANOUT").map(_.toInt).getOrElse(2)
 
   // Reconfiguration network build max retry
   val MAX_RETRY_CONF: Int = 10000

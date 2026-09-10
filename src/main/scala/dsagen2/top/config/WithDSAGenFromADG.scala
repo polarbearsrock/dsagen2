@@ -35,7 +35,8 @@ class WithDSAGenFromADG(filename: String = "")
           val jsonVal: JsValue = Json.parse(jsonStr)
           sourceFile.close()
           // Generate DSAGen
-          val dsa = LazyModule(DSAGen(jsonVal)(p))
+          // Print the hardware-exact ADG (with config bit encodings) next to the input one
+          val dsa = LazyModule(DSAGen(jsonVal)(p ++ new PrintADG))
           dsa
         })
       case SystemBusKey => up(SystemBusKey).copy(beatBytes = 16)

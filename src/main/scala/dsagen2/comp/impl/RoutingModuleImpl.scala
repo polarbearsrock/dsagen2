@@ -174,8 +174,11 @@ trait RoutingModuleImpl {
       // For this output port, the hasSource signal mean all subnet has source
       // The first orR is applied to 1H, the second andR is applied to all subnet
       val hasSource: Bool = VecInit(muxVecDataValid.map(x => VecInit(x._3).asUInt().orR())).asUInt().andR()
-      // Connection
-      output.valid := muxValid // Valid
+      // Connection. The valid must also require a selected source: Mux1H over a
+      // single candidate returns that candidate whatever the select is, so a
+      // grounded (sel = 0) output of a single-input switch would otherwise keep
+      // receiving data, fill its buffer and report the node busy forever.
+      output.valid := muxValid && hasSource // Valid
       output.bits.vecData.zip(muxVecTagValue).foreach { case (outData, muxData) => outData := muxData }
       outputHasSource(outputIdx) := hasSource
     }

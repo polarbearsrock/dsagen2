@@ -372,7 +372,8 @@ abstract class DSAGen(implicit p: Parameters)
       while (!success) {
         configTreeViz.clear()
         reconfNet.clear()
-        success = buildConfigNetwork(dispatcher.initReconfNode)
+        // Pass the retry count so that the start node changes every 100 attempts
+        success = buildConfigNetwork(dispatcher.initReconfNode, retry)
         if (printDebug) configTreeViz += "}"
         // Timeout
         retry += 1
@@ -403,8 +404,18 @@ abstract class DSAGen(implicit p: Parameters)
         import java.time.format.DateTimeFormatter
         val newTS: String = DateTimeFormatter.ofPattern(".yyyyMMdd-HHmmss").format(LocalDateTime.now)
         // generate name if the given one is empty
-        val adgName = if (fname == "") dsagenNumberName.name + newTS + ".json" else fname
-        val dotName = if (fname == "") dsagenNumberName.name + newTS + ".dot" else fname
+        // fname may be the path of the input ADG (from the ADG environment variable):
+        // then write the hardware-exact copy next to it as <name>-hw.json
+        val adgName =
+          if (fname == "") dsagenNumberName.name + newTS + ".json"
+          else if (fname.endsWith(".json") && new java.io.File(fname).isAbsolute)
+            new java.io.File(fname).getName.stripSuffix(".json") + "-hw.json"
+          else fname
+        val dotName =
+          if (fname == "") dsagenNumberName.name + newTS + ".dot"
+          else if (fname.endsWith(".json") && new java.io.File(fname).isAbsolute)
+            new java.io.File(fname).getName.stripSuffix(".json") + "-hw.dot"
+          else fname
         // Print
         if (printDebug)
           println(
@@ -448,8 +459,11 @@ abstract class DSAGen(implicit p: Parameters)
       successorLink.map(succ => link ~> succ)
     }
 
-    // Build the graph
-    val dag = Graph(partialOrder: _*)
+    // Build the graph. Every link must be a node of the graph, not only the
+    // ones that take part in an ordering relation: a link whose source has a
+    // single output and whose sink has a single input has no successor or
+    // predecessor and would otherwise be silently dropped from the result.
+    val dag = Graph.from(unsortLinks, partialOrder)
 
     // Topological Sort
     dag.topologicalSort.fold(
@@ -627,8 +641,15 @@ object DSAGen {
       jsonEdges2DSALinks((adgJson \ DSAGenEdges.keyName).get.as[JsArray])
 
     // Instantiate DSAGen Node and create a (nodeType, nodeId) to node module mapping
+    // Hardware node ids are handed out sequentially per node type at creation
+    // time, so create the nodes in the order of the ids given in the ADG:
+    // otherwise a file that lists e.g. InputVectorPort.6 first gets that port
+    // built as hardware port 0, and every edge index and bitstream compiled
+    // against the file targets the wrong hardware.
     val nodeName2CompNode: Map[(DSAGenNodeType, Int), LazyModule] =
-      dsaNodes.fields.map {
+      dsaNodes.fields.sortBy { case (nodeName, _) =>
+        val (t, id) = nodeName2pair(nodeName); (t.toString, id)
+      }.map {
         case (nodeName, jsonObj) =>
           val (nodeType, nodeId) = nodeName2pair(nodeName)
           val config: Parameters = json2cde(jsonObj)
