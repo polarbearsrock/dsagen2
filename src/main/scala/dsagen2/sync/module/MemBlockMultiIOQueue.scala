@@ -256,9 +256,13 @@ class MemBlockMultiIOQueue[T <: Data](
   val totalWriteData: Vec[UInt] = Wire(Vec(numBlock*2, UInt(genType.getWidth.W)))
   totalWriteData.zipWithIndex.foreach { case (word, idx) =>
     val data: Seq[T] = vecInput.map(_.bits)
+    // The tail offset ranges over the whole row (numBlock units), not just the input width: with fewer
+    // input units than blocks (an OVP whose compute side is narrower than the memory bus, e.g. one 64-bit
+    // link into a 32-byte bus) the lookup fell through to 0 for offsets >= numInput and the queue stored
+    // zeros for three of every four positions while the mask still marked them valid.
     val mapping: Seq[(UInt, Data)] =
-      for (shift_by <- data.indices) yield {
-        if (shift_by <= idx && idx-shift_by < data.length && idx-shift_by >= 0) {
+      for (shift_by <- 0 until numBlock) yield {
+        if (shift_by <= idx && idx-shift_by < data.length) {
           (shift_by.U, data(idx-shift_by))
         } else {
           (shift_by.U, 0.U)
@@ -378,5 +382,9 @@ class MemBlockMultiIOQueue[T <: Data](
 
   // Enqueue / Dequeue Fired
   enqFire := enqFireWire
-  deqFire := deqFireReg || deqFireByPadWire // Fire regular or Fire by pad
+  // A regular dequeue is decided one cycle early (SyncReadMem) from the ready mask of that cycle; if the
+  // consumer dropped every ready in between (an OVP's stream table leaves the Requested state after the
+  // first response), no data moves (out.valid and moveHead are ready-gated) and no fire must be reported:
+  // a spurious fire popped the OVP's stream-state queue and desynchronised padding/discard decisions.
+  deqFire := (deqFireReg && readyOutputExist) || deqFireByPadWire // Fire regular or Fire by pad
 }

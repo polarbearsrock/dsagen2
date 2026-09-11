@@ -153,8 +153,12 @@ class DMAWriterModule(
 
     /* ------------------------- Output Connection            ------------------------- */
 
-    // Pause the write request if there is only one left
-    writePause := xactBusy.andR() || xactId >= (robSize - 1).U
+    // Pause the write request if there is only one transaction id left, or if the request pipeline
+    // (TLB queue / translated queue, held while TileLink is not ready or a TLB miss retries) cannot
+    // accept a request this cycle. memRequest has no ready signal: a request presented while
+    // untranslated_a is not ready was silently dropped, which lost the two 8-byte units around a
+    // 32-byte boundary (two back-to-back one-unit requests) under TileLink backpressure.
+    writePause := xactBusy.andR() || xactId >= (robSize - 1).U || !untranslated_a.ready
 
     /* ------------------------- Hardware Sanity Check        ------------------------- */
 
