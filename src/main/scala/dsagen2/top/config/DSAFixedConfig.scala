@@ -171,7 +171,10 @@ object DSAFixedConfig {
   val VP_REPEAT_FRAC_BITS:     Int = 4
 
   // Maximum capacity of vector in bytes
-  val MAX_VP_BYTE: Int = 128
+  // Raised from 128: a recurrence loop (OVP -> recurrence engine -> IVP) must hold
+  // the whole recurrence distance in flight (mm: P/unroll = 16 vectors = 512 B),
+  // and 128-byte ports plus the fabric FIFOs were exactly at that edge.
+  val MAX_VP_BYTE: Int = 1024
 
   def MAX_VP_BYTE_BITS: Int = log2Ceil(MAX_VP_BYTE)
 
