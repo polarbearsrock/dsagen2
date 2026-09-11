@@ -86,14 +86,26 @@ class DMAWriterModule(
     val xactBusy_add:    UInt = Mux(xactBusy_fire, (1.U << xactId).asUInt(), 0.U)
     val xactBusy_remove: UInt = (~Mux(tl.d.fire(), (1.U << tl.d.bits.source).asUInt(), 0.U)).asUInt()
 
+    // Input queue. memRequest carries no ready: the stream table selects a write stream one cycle
+    // before the request shows up here and cannot hold it back, so every request must be absorbed.
+    // A request that arrived while the TLB/translate pipeline was busy (e.g. a TLB-miss retry
+    // occupying the arbiter) used to be dropped silently; writePause is raised while the queue
+    // could not also take the request that may already be in flight.
+    val reqQueueDepth: Int = 4
+    val reqQueue = Module(new Queue(chiselTypeOf(memRequest), reqQueueDepth))
+    reqQueue.io.enq.valid := newWrite
+    reqQueue.io.enq.bits := memRequest
+    assert(!(newWrite && !reqQueue.io.enq.ready), "DMA writer request queue overflow")
+    val pending: MemRequest = reqQueue.io.deq.bits
+
     // Since we generated the mask before, so we always put partial
     val putPartial: TLBundleA = edge
       .Put(
-        fromSource = RegEnableThru(xactId, memRequest.valid),
+        fromSource = xactId,
         toAddress = 0.U,
         lgSize = fullLgSize.U,
-        data = memRequest.data,
-        mask = memRequest.mask
+        data = pending.data,
+        mask = pending.mask
       )
       ._2
 
@@ -104,11 +116,12 @@ class DMAWriterModule(
 
     // Request to TileLink
     val untranslated_a: DecoupledIO[TLBundleAWithInfo] = Wire(Decoupled(new TLBundleAWithInfo))
-    xactBusy_fire := untranslated_a.fire() && newWrite
-    untranslated_a.valid := newWrite && !xactBusy.andR()
+    untranslated_a.valid := reqQueue.io.deq.valid && !xactBusy.andR()
+    reqQueue.io.deq.ready := untranslated_a.ready && !xactBusy.andR()
+    xactBusy_fire := untranslated_a.fire()
     untranslated_a.bits.tl_a := putPartial
-    untranslated_a.bits.vaddr := memRequest.vaddr
-    untranslated_a.bits.status := memRequest.mStatus.get
+    untranslated_a.bits.vaddr := pending.vaddr
+    untranslated_a.bits.status := pending.mStatus.get
 
     // 0 goes to retries, 1 goes to state machine
     val retry_a:        DecoupledIO[TLBundleAWithInfo] = Wire(Decoupled(new TLBundleAWithInfo))
@@ -158,7 +171,7 @@ class DMAWriterModule(
     // accept a request this cycle. memRequest has no ready signal: a request presented while
     // untranslated_a is not ready was silently dropped, which lost the two 8-byte units around a
     // 32-byte boundary (two back-to-back one-unit requests) under TileLink backpressure.
-    writePause := xactBusy.andR() || xactId >= (robSize - 1).U || !untranslated_a.ready
+    writePause := xactBusy.andR() || xactId >= (robSize - 1).U || reqQueue.io.count >= (reqQueueDepth - 2).U
 
     /* ------------------------- Hardware Sanity Check        ------------------------- */
 
